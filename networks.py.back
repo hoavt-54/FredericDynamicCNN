@@ -1,0 +1,184 @@
+# -*- coding: utf-8 -*-
+__author__ = 'Frederic Godin  (frederic.godin@ugent.be / www.fredericgodin.com)'
+import lasagne
+import DCNN
+import theano.tensor as T
+
+
+def parseActivation(str_a):
+    if str_a=="linear":
+        return lasagne.nonlinearities.linear
+    elif str_a=="tanh":
+        return lasagne.nonlinearities.tanh
+    elif str_a=="rectify":
+        return lasagne.nonlinearities.rectify
+    elif str_a=="sigmoid":
+        return lasagne.nonlinearities.sigmoid
+    else:
+        raise Exception("Activation function \'"+str_a+"\' is not recognized")
+
+
+def buildDCNNPaper(sents1, sents2, batch_size,vocab_size,embeddings_size=48,filter_sizes=[10,7],nr_of_filters=[6,12],activations=["tanh","tanh"],ktop=5,dropout=0.5,output_classes=2,padding='last'):
+
+    premis_l_in = lasagne.layers.InputLayer(
+        shape=(batch_size, None),
+        input_var=sents1
+    )
+
+    hypo_l_in = lasagne.layers.InputLayer(
+        shape=(batch_size, None),
+        input_var = sents2
+    )
+
+
+
+    premis_l_embedding = DCNN.embeddings.SentenceEmbeddingLayer(
+        premis_l_in,
+        vocab_size,
+        embeddings_size,
+        padding=padding
+    )
+
+    hypo_l_embedding = DCNN.embeddings.SentenceEmbeddingLayer(
+        hypo_l_in,
+        vocab_size,
+        embeddings_size,
+        padding=padding
+    )
+
+
+
+    premis_l_conv1 = DCNN.convolutions.Conv1DLayerSplitted(
+        premis_l_embedding,
+        nr_of_filters[0],
+        filter_sizes[0],
+        nonlinearity=lasagne.nonlinearities.linear,
+        border_mode="full"
+    )
+
+    hypo_l_conv1 = DCNN.convolutions.Conv1DLayerSplitted(
+        hypo_l_embedding,
+        nr_of_filters[0],
+        filter_sizes[0],
+        nonlinearity=lasagne.nonlinearities.linear,
+        border_mode="full"
+    )
+
+
+    premis_l_fold1 = DCNN.folding.FoldingLayer(premis_l_conv1)
+    hypo_l_fold1 = DCNN.folding.FoldingLayer(hypo_l_conv1)
+
+
+    premis_l_pool1 = DCNN.pooling.DynamicKMaxPoolLayer(premis_l_fold1,ktop,nroflayers=2,layernr=1)
+    hypo_l_pool1 = DCNN.pooling.DynamicKMaxPoolLayer(hypo_l_fold1,ktop,nroflayers=2,layernr=1)
+
+    premis_l_nonlinear1 = lasagne.layers.NonlinearityLayer(premis_l_pool1,nonlinearity=parseActivation(activations[0]))
+    hypo_l_nonlinear1 = lasagne.layers.NonlinearityLayer(hypo_l_pool1,nonlinearity=parseActivation(activations[0]))
+
+
+    premis_l_conv2 = DCNN.convolutions.Conv1DLayerSplitted(
+        premis_l_nonlinear1,
+        nr_of_filters[1],
+        filter_sizes[1],
+        nonlinearity=lasagne.nonlinearities.linear,
+        border_mode="full"
+    )
+
+    hypo_l_conv2 = DCNN.convolutions.Conv1DLayerSplitted(
+        hypo_l_nonlinear1,
+        nr_of_filters[1],
+        filter_sizes[1],
+        nonlinearity=lasagne.nonlinearities.linear,
+        border_mode="full"
+    )
+
+
+
+    premis_l_fold2 = DCNN.folding.FoldingLayer(premis_l_conv2)
+    hypo_l_fold2 = DCNN.folding.FoldingLayer(hypo_l_conv2)
+
+    premis_l_pool2 = DCNN.pooling.KMaxPoolLayer(premis_l_fold2,ktop)
+    hypo_l_pool2 = DCNN.pooling.KMaxPoolLayer(hypo_l_fold2,ktop)
+
+    # last fully connected layers
+    premis_l_nonlinear2 = lasagne.layers.NonlinearityLayer(premis_l_pool2,nonlinearity=parseActivation(activations[1]))
+    hypo_l_nonlinear2 = lasagne.layers.NonlinearityLayer(hypo_l_pool2,nonlinearity=parseActivation(activations[1]))
+    
+    premis_l_dropout2=lasagne.layers.DropoutLayer(premis_l_nonlinear2,p=dropout)
+    hypo_l_dropout2=lasagne.layers.DropoutLayer(hypo_l_nonlinear2,p=dropout)
+    
+    premis_repre = lasagne.layers.DenseLayer(
+        premis_l_dropout2,
+        num_units=200,
+        nonlinearity=lasagne.nonlinearities.tanh
+        )
+    hypo_repre = lasagne.layers.DenseLayer(
+        hypo_l_dropout2,
+        num_units=200,
+        nonlinearity=lasagne.nonlinearities.tanh
+        )
+    
+    #Now concatenate (u, v, |u − v|, u * v 
+    u = premis_repre
+    v = hypo_repre
+    diff = lasagne.layers.ElemwiseMergeLayer([u,v], T.sub) 
+    mul = lasagne.layers.ElemwiseMergeLayer([u,v], T.mul) 
+    fc_input = lasagne.layers.ConcatLayer([u,v])
+    fc_input = lasagne.layers.DropoutLayer(fc_input, p=dropout)
+    fc = lasagne.layers.DenseLayer(fc_input, 
+                num_units=300, 
+                nonlinearity=lasagne.nonlinearities.tanh 
+            )
+
+    h_drop = lasagne.layers.DropoutLayer(fc, p=dropout)
+    
+    #premis_l_dropout2=lasagne.layers.DropoutLayer(premis_l_nonlinear2,p=dropout)
+    #hypo_l_dropout2=lasagne.layers.DropoutLayer(hypo_l_nonlinear2,p=dropout)
+
+    #premis_l_out = lasagne.layers.DenseLayer(
+    #    premis_l_dropout2,
+    #    num_units=output_classes,
+    #    nonlinearity=lasagne.nonlinearities.softmax
+    #    )
+
+    output = lasagne.layers.DenseLayer(
+        h_drop,
+        num_units=output_classes,
+        nonlinearity=lasagne.nonlinearities.softmax
+        )
+    
+    return output
+
+
+
+
+def buildMaxTDNN(batch_size,vocab_size,embeddings_size,filter_size,output_classes):
+
+    l_in = lasagne.layers.InputLayer(
+        shape=(batch_size, None),
+    )
+
+    l_embedding = DCNN.embeddings.SentenceEmbeddingLayer(l_in, vocab_size, embeddings_size)
+
+
+    l_conv1 = DCNN.convolutions.Conv1DLayer(
+        l_embedding,
+        1,
+        filter_size,
+        nonlinearity=lasagne.nonlinearities.tanh,
+        stride=1,
+        border_mode="valid",
+
+    )
+
+    l_pool1 = lasagne.layers.GlobalPoolLayer(l_conv1,pool_function=T.max)
+
+    l_out = lasagne.layers.DenseLayer(
+        l_pool1,
+        num_units=output_classes,
+        nonlinearity=lasagne.nonlinearities.softmax,
+        )
+
+    return l_out
+
+
