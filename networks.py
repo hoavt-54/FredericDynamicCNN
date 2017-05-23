@@ -121,6 +121,8 @@ def buildDCNNPaper(input1, input2, batch_size,vocab_size,embeddings_size=48,filt
         nonlinearity=lasagne.nonlinearities.tanh
         )
     #return hypo_rep
+    
+    # if I just ouput either prem_rep or hypo_rep, it works really well. Even thought that doesnt make sense
 
     #concat here
     #fc = lasagne.layers.ConcatLayer([prem_rep, hypo_rep])
